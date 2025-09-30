@@ -2,8 +2,11 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"os"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
@@ -67,10 +70,11 @@ var (
 
 // Exporter is our exporter type
 type Exporter struct {
-	bucket    string
-	prefix    string
-	delimiter string
-	svc       s3iface.S3API
+	bucket        string
+	prefix        string
+	delimiter     string
+	svc           s3iface.S3API
+	useHeadMethod bool
 }
 
 // Describe all the metrics we export
@@ -90,29 +94,33 @@ func (e *Exporter) Describe(ch chan<- *prometheus.Desc) {
 
 // Collect metrics
 func (e *Exporter) Collect(ch chan<- prometheus.Metric) {
-    // Try HEAD request first
-    bytesUsed, objCount, err := getBucketUsageHEAD(e.svc, e.bucket)
-    if err == nil {
-        // HEAD method succeeded, use those values
-        ch <- prometheus.MustNewConstMetric(
-            s3ListSuccess, prometheus.GaugeValue, 1, e.bucket, e.prefix, e.delimiter,
-        )
-        ch <- prometheus.MustNewConstMetric(
-            s3ObjectTotal, prometheus.GaugeValue, objCount, e.bucket, e.prefix,
-        )
-        ch <- prometheus.MustNewConstMetric(
-            s3SumSize, prometheus.GaugeValue, bytesUsed, e.bucket, e.prefix,
-        )
-        return
-    }
+	// Try HEAD request first if enabled and no delimiter is set (HEAD only works for whole bucket)
+	if e.useHeadMethod && e.delimiter == "" {
+		bytesUsed, objCount, err := getBucketUsageHEAD(e.svc, e.bucket)
+		if err == nil {
+			// HEAD method succeeded, use those values
+			ch <- prometheus.MustNewConstMetric(
+				s3ListSuccess, prometheus.GaugeValue, 1, e.bucket, e.prefix, e.delimiter,
+			)
+			ch <- prometheus.MustNewConstMetric(
+				s3ObjectTotal, prometheus.GaugeValue, objCount, e.bucket, e.prefix,
+			)
+			ch <- prometheus.MustNewConstMetric(
+				s3SumSize, prometheus.GaugeValue, bytesUsed, e.bucket, e.prefix,
+			)
+			return
+		}
+		// HEAD method failed, log the error and fall back to ListObjects
+		log.Warnln("HEAD method failed, falling back to ListObjects:", err)
+	}
 
-    // fallback to current logic
-    var lastModified time.Time
-    var numberOfObjects float64
-    var totalSize int64
-    var biggestObjectSize int64
-    var lastObjectSize int64
-    var commonPrefixes int
+	// fallback to current logic
+	var lastModified time.Time
+	var numberOfObjects float64
+	var totalSize int64
+	var biggestObjectSize int64
+	var lastObjectSize int64
+	var commonPrefixes int
 
     query := &s3.ListObjectsV2Input{
         Bucket:    aws.String(e.bucket),
@@ -179,7 +187,7 @@ func (e *Exporter) Collect(ch chan<- prometheus.Metric) {
 	}
 }
 
-func probeHandler(w http.ResponseWriter, r *http.Request, svc s3iface.S3API) {
+func probeHandler(w http.ResponseWriter, r *http.Request, svc s3iface.S3API, useHeadMethod bool) {
 	bucket := r.URL.Query().Get("bucket")
 	if bucket == "" {
 		http.Error(w, "bucket parameter is missing", http.StatusBadRequest)
@@ -190,10 +198,11 @@ func probeHandler(w http.ResponseWriter, r *http.Request, svc s3iface.S3API) {
 	delimiter := r.URL.Query().Get("delimiter")
 
 	exporter := &Exporter{
-		bucket:    bucket,
-		prefix:    prefix,
-		delimiter: delimiter,
-		svc:       svc,
+		bucket:        bucket,
+		prefix:        prefix,
+		delimiter:     delimiter,
+		svc:           svc,
+		useHeadMethod: useHeadMethod,
 	}
 
 	registry := prometheus.NewRegistry()
@@ -238,7 +247,7 @@ func discoveryHandler(w http.ResponseWriter, r *http.Request, svc s3iface.S3API)
 	}
 	w.Header().Set("Content-Type", "application/json")
 	if _, err := w.Write(data); err != nil {
-		log.Printf("failed to write JSON response: %v", err)
+		log.Errorln("failed to write JSON response:", err)
 	}
 }
 
@@ -256,6 +265,7 @@ func main() {
 		endpointURL    = app.Flag("s3.endpoint-url", "Custom endpoint URL").Default("").String()
 		disableSSL     = app.Flag("s3.disable-ssl", "Custom disable SSL").Bool()
 		forcePathStyle = app.Flag("s3.force-path-style", "Custom force path style").Bool()
+		useHeadMethod  = app.Flag("s3.use-head-method", "Use HEAD method to get bucket usage from Ceph RGW (fallback to ListObjects if not available)").Default("true").Bool()
 	)
 
 	log.AddFlags(app)
@@ -286,7 +296,7 @@ func main() {
 
 	http.Handle(*metricsPath, promhttp.Handler())
 	http.HandleFunc(*probePath, func(w http.ResponseWriter, r *http.Request) {
-		probeHandler(w, r, svc)
+		probeHandler(w, r, svc, *useHeadMethod)
 	})
 	http.HandleFunc(*discoveryPath, func(w http.ResponseWriter, r *http.Request) {
 		discoveryHandler(w, r, svc)
@@ -302,7 +312,7 @@ func main() {
 			</body>
 			</html>`))
 		if err != nil {
-			log.Printf("failed to write response: %v", err)
+			log.Errorln("failed to write response:", err)
 		}
 	})
 
@@ -320,35 +330,31 @@ func main() {
 // getBucketUsageHEAD attempts to query the bucket usage using a Ceph-specific HEAD request to the bucket root.
 // Ceph returns usage information in the headers (x-rgw-*).
 func getBucketUsageHEAD(svc s3iface.S3API, bucket string) (float64, float64, error) {
-	// Create a custom HEAD request
-	r := request.New(aws.NewConfig(), metadata.ClientInfo{}, handlers.Handlers{}, nil, nil)
-	r.Operation = &request.Operation{
-		Name:       "HeadBucket",
-		HTTPMethod: "HEAD",
-		HTTPPath:   fmt.Sprintf("/%s", bucket),
-	}
-	
-	r.HTTPRequest = &http.Request{
-		Method: "HEAD",
-		URL: &url.URL{
-			Scheme: "https",
-			Host:   svc.Endpoint,
-			Path:   fmt.Sprintf("/%s", bucket),
-		},
-		Header: make(http.Header),
+	// Create a HEAD request to the bucket
+	input := &s3.HeadBucketInput{
+		Bucket: aws.String(bucket),
 	}
 
-	// Send the request manually
-	err := r.Send()
+	// Create a custom request to capture headers
+	req, _ := svc.HeadBucketRequest(input)
+	
+	// Send the request
+	err := req.Send()
 	if err != nil {
 		return 0, 0, fmt.Errorf("failed to send HEAD request: %w", err)
 	}
 
-	headers := r.HTTPResponse.Header
+	// Check if we have the HTTP response
+	if req.HTTPResponse == nil {
+		return 0, 0, fmt.Errorf("no HTTP response received")
+	}
+
+	headers := req.HTTPResponse.Header
 	bytesStr := headers.Get("x-rgw-bytes-used")
 	objsStr := headers.Get("x-rgw-objects-count")
+	
 	if bytesStr == "" || objsStr == "" {
-		return 0, 0, fmt.Errorf("Ceph headers not present in response")
+		return 0, 0, fmt.Errorf("Ceph headers not present in response (x-rgw-bytes-used: %q, x-rgw-objects-count: %q)", bytesStr, objsStr)
 	}
 
 	bytesUsed, err := strconv.ParseFloat(strings.TrimSpace(bytesStr), 64)
@@ -362,11 +368,3 @@ func getBucketUsageHEAD(svc s3iface.S3API, bucket string) (float64, float64, err
 
 	return bytesUsed, objCount, nil
 }
-
-// NOTE: call this in (*Exporter).Collect() before falling back to ListObjects
-// bytesUsed, objCount, err := getBucketUsageHEAD(e.svc, e.bucket)
-// if err == nil {
-// 	ch <- prometheus.MustNewConstMetric(s3ObjectTotal, prometheus.GaugeValue, objCount, e.bucket, e.prefix)
-// 	ch <- prometheus.MustNewConstMetric(s3SumSize, prometheus.GaugeValue, bytesUsed, e.bucket, e.prefix)
-// 	return
-// }

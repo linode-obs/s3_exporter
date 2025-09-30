@@ -212,7 +212,7 @@ func probe(bucket, prefix, delimiter string) (rr *httptest.ResponseRecorder, err
 
 	rr = httptest.NewRecorder()
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		probeHandler(w, r, mockSvc)
+		probeHandler(w, r, mockSvc, false) // disable HEAD method for tests
 	})
 
 	handler.ServeHTTP(rr, req)
