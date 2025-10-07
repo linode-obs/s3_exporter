@@ -31,7 +31,7 @@ format:
 
 vet:
 	@echo ">> vetting code"
-	@go vet $(pkgs)
+	@go vet ./...
 
 build:
 	@echo ">> building binary"
@@ -48,19 +48,9 @@ docker:
 	@echo ">> building docker image"
 	@docker build -t "$(DOCKER_IMAGE_NAME):$(DOCKER_IMAGE_TAG)" .
 
-$(GOPATH)/bin/goreleaser:
-	@curl -sfL https://install.goreleaser.com/github.com/goreleaser/goreleaser.sh | BINDIR=$(GOPATH)/bin sh
-
-snapshot: $(GOPATH)/bin/goreleaser
-	@echo ">> building snapshot"
-	@$(GOPATH)/bin/goreleaser --snapshot --skip-sign --skip-validate --skip-publish --rm-dist
-
-release: $(GOPATH)/bin/goreleaser
-	@$(GOPATH)/bin/goreleaser release
-
 clean:
 	@echo ">> removing build artifacts"
 	@rm -Rf $(BIN_DIR)
 	@rm -Rf $(BIN_NAME)
 
-.PHONY: all style test format vet build docker snapshot release clean
+.PHONY: all style test format vet build docker clean
