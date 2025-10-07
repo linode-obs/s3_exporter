@@ -197,6 +197,7 @@ func (e *Exporter) collectWithListObjects(ch chan<- prometheus.Metric) {
 		Delimiter: aws.String(e.delimiter),
 	}
 
+	// Continue making requests until we've listed and compared the date of every object
 	startList := time.Now()
 	for {
 		resp, err := e.svc.ListObjectsV2(query)
@@ -241,7 +242,7 @@ func (e *Exporter) collectWithListObjects(ch chan<- prometheus.Metric) {
 		query.ContinuationToken = resp.NextContinuationToken
 	}
 
-	listDuration := time.Now().Sub(startList).Seconds()
+	listDuration := time.Since(startList).Seconds()
 
 	ch <- prometheus.MustNewConstMetric(
 		s3ListSuccess, prometheus.GaugeValue, 1, e.bucket, e.prefix, e.delimiter,
