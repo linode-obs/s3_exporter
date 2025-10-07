@@ -26,9 +26,7 @@ const (
 
 // Global configuration variables
 var (
-	useHeadMethod   bool
-	prodSafeMode    bool
-	maxObjectsLimit int
+	useHeadMethod bool
 )
 
 var (
@@ -80,7 +78,6 @@ type Exporter struct {
 	prefix        string
 	delimiter     string
 	useHeadMethod bool
-	prodSafeMode  bool
 }
 
 func (e *Exporter) Describe(ch chan<- *prometheus.Desc) {
@@ -167,18 +164,9 @@ func (e *Exporter) Collect(ch chan<- prometheus.Metric) {
 			return
 		}
 		log.Warnf("HEAD method failed or returned no data: %v", err)
-
-		// If prod-safe-mode is enabled and HEAD fails, refuse to do dangerous ListObjects
-		if e.prodSafeMode {
-			log.Errorf("HEAD method failed and prod-safe-mode enabled - refusing ListObjects to prevent incidents")
-			ch <- prometheus.MustNewConstMetric(
-				s3ListSuccess, prometheus.GaugeValue, 0, e.bucket, e.prefix, e.delimiter,
-			)
-			return
-		}
 	}
 
-	// Fallback to traditional ListObjects approach with production safety limits
+	// Fallback to traditional ListObjects approach
 	e.collectWithListObjects(ch)
 }
 
@@ -189,8 +177,6 @@ func (e *Exporter) collectWithListObjects(ch chan<- prometheus.Metric) {
 	var biggestObjectSize int64
 	var lastObjectSize int64
 	var commonPrefixes int
-	var objectsProcessed int64 = 0
-
 	query := &s3.ListObjectsV2Input{
 		Bucket:    aws.String(e.bucket),
 		Prefix:    aws.String(e.prefix),
@@ -212,14 +198,7 @@ func (e *Exporter) collectWithListObjects(ch chan<- prometheus.Metric) {
 		commonPrefixes = commonPrefixes + len(resp.CommonPrefixes)
 
 		for _, item := range resp.Contents {
-			// Production safety: check object limit
-			if objectsProcessed >= int64(maxObjectsLimit) {
-				log.Warnf("Reached production safety limit of %d objects, stopping enumeration", maxObjectsLimit)
-				break
-			}
-
 			numberOfObjects++
-			objectsProcessed++
 			totalSize = totalSize + *item.Size
 			if item.LastModified.After(lastModified) {
 				lastModified = *item.LastModified
@@ -228,12 +207,6 @@ func (e *Exporter) collectWithListObjects(ch chan<- prometheus.Metric) {
 			if *item.Size > biggestObjectSize {
 				biggestObjectSize = *item.Size
 			}
-		}
-
-		// Production safety: break if we hit the limit
-		if objectsProcessed >= int64(maxObjectsLimit) {
-			log.Warnf("Hit production safety limit, processed %d objects", objectsProcessed)
-			break
 		}
 
 		if resp.NextContinuationToken == nil {
@@ -289,7 +262,6 @@ func probeHandler(w http.ResponseWriter, r *http.Request, svc s3iface.S3API) {
 		prefix:        prefix,
 		delimiter:     delimiter,
 		useHeadMethod: useHeadMethod,
-		prodSafeMode:  prodSafeMode,
 	}
 	registry.MustRegister(exporter)
 
@@ -344,8 +316,6 @@ func main() {
 		disableSSL     = kingpin.Flag("s3.disable-ssl", "Custom disable SSL").Bool()
 		forcePathStyle = kingpin.Flag("s3.force-path-style", "Custom force path style").Bool()
 		useHeadFlag    = kingpin.Flag("s3.use-head-method", "Use HEAD method to get bucket usage from Ceph RGW").Bool()
-		prodSafeFlag   = kingpin.Flag("s3.prod-safe-mode", "Production safe mode - never fall back to ListObjects (prevents OBJ incidents)").Bool()
-		maxObjectsFlag = kingpin.Flag("s3.max-objects", "Maximum number of objects to process (production safety limit)").Default("10000").Int()
 	)
 
 	log.AddFlags(kingpin.CommandLine)
@@ -355,12 +325,10 @@ func main() {
 
 	// Initialize global configuration
 	useHeadMethod = *useHeadFlag
-	prodSafeMode = *prodSafeFlag
-	maxObjectsLimit = *maxObjectsFlag
 
 	log.Infoln("Starting s3_exporter", version.Info())
 	log.Infoln("Build context", version.BuildContext())
-	log.Infof("Configuration: HEAD method=%v, Prod-safe mode=%v, Max objects=%d", useHeadMethod, prodSafeMode, maxObjectsLimit)
+	log.Infof("Configuration: HEAD method=%v", useHeadMethod)
 
 	config := &aws.Config{}
 	if *endpointURL != "" {

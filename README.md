@@ -5,9 +5,9 @@
 [![Go Report Card](https://goreportcard.com/badge/github.com/linode-obs/s3_exporter)]
 [![contributions](https://img.shields.io/badge/contributions-welcome-brightgreen.svg?style=flat")](https://github.com/linode-obs/s3_exporter/issues)
 
-**Production-safe S3 exporter for Prometheus with HEAD method support for efficient Ceph RGW monitoring.**
+**S3 exporter for Prometheus with HEAD method**
 
-This exporter provides efficient bucket usage monitoring using Ceph RGW's HEAD method extension, eliminating the need for expensive ListObjects operations on large buckets. Originally forked from ribbybibby/s3_exporter with critical enhancements for production safety.
+This exporter provides efficient bucket usage monitoring using Ceph RGW's HEAD method extension, eliminating the need for expensive ListObjects operations on large buckets. Originally forked from ribbybibby/s3_exporter with HEAD method optimization.
 
 ## Table of Contents
 - [Installation](#installation)
@@ -16,7 +16,7 @@ This exporter provides efficient bucket usage monitoring using Ceph RGW's HEAD m
 - [Kubernetes Deployment](#kubernetes-deployment)
 - [Metrics Instrumented](#metrics-instrumented)
 - [Prometheus Configuration](#prometheus-configuration)
-- [Troubleshooting Production Issues](#-troubleshooting-production-issues)
+- [Troubleshooting](#troubleshooting)
 - [Why HEAD Method is Critical](#why-head-method-is-critical)
 - [Contributing](#contributing)
 
@@ -86,16 +86,12 @@ export S3_USE_HEAD_METHOD="true"
 ### Command Line Usage
 
 ```bash
-# PRODUCTION SAFE (recommended)
+# Basic usage with HEAD method
 ./s3_exporter \
   --s3.endpoint-url=https://us-east-1.linodeobjects.com \
   --s3.force-path-style=true \
   --s3.use-head-method=true \
-  --s3.prod-safe-mode=true \
   --web.listen-address=:9340
-
-# The above flags are all DEFAULT values, so this is equivalent:
-./s3_exporter --s3.endpoint-url=https://us-east-1.linodeobjects.com
 ```
 
 ### All Available Flags
@@ -112,8 +108,7 @@ export S3_USE_HEAD_METHOD="true"
       --s3.endpoint-url=""       Custom endpoint URL (set to your Linode region)
       --s3.disable-ssl           Custom disable SSL (leave false for Linode)  
       --s3.force-path-style      Custom force path style (set to true for Linode)
-      --s3.use-head-method=true  🛡️ Use HEAD method for Ceph RGW efficiency (DEFAULT)
-      --s3.prod-safe-mode=true   🚨 Production safe mode - never use ListObjects (DEFAULT)
+      --s3.use-head-method       Use HEAD method for Ceph RGW efficiency
       --log.level="info"         Only log messages with the given severity or above
       --log.format="logger:stderr"
                                  Set the log target and format
@@ -124,14 +119,13 @@ Flags can also be set as environment variables, prefixed by `S3_EXPORTER_`. For 
 
 ## CLI Reference
 
-### Critical Production Flags
+### Important Flags
 
-| Flag | Default | Description | Production Use |
-|------|---------|-------------|----------------|
-| `--s3.prod-safe-mode` | `true` | 🚨 **CRITICAL**: Never fall back to ListObjects | ✅ **ALWAYS ENABLE** for production |
-| `--s3.use-head-method` | `true` | ⚡ Use efficient HEAD requests with x-rgw-* headers | ✅ **REQUIRED** for large buckets |
-| `--s3.endpoint-url` | `""` | Linode Object Storage endpoint URL | ✅ **REQUIRED**: Set to your region |
-| `--s3.force-path-style` | `false` | Use path-style requests (required for Linode) | ✅ **REQUIRED**: Always `true` for Linode |
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--s3.use-head-method` | `false` | Use efficient HEAD requests with x-rgw-* headers for large buckets |
+| `--s3.endpoint-url` | `""` | Linode Object Storage endpoint URL (set to your region) |
+| `--s3.force-path-style` | `false` | Use path-style requests (required for Linode Object Storage) |
 
 ### Monitoring Endpoints
 
@@ -155,7 +149,7 @@ docker run -d \
   s3-exporter:latest \
   --s3.endpoint-url=https://us-east-1.linodeobjects.com \
   --s3.force-path-style=true \
-  --s3.prod-safe-mode=true \
+  --s3.use-head-method
   --s3.use-head-method=true
 ```
 
@@ -202,7 +196,7 @@ This is useful for monitoring Loki's internal structure without listing every in
 
 The following Prometheus metrics are exposed:
 
-### Bucket Metrics (HEAD Method - Production Safe)
+### Bucket Metrics (HEAD Method)
 
 | Metric | Type | Description | Labels |
 |--------|------|-------------|---------|
@@ -352,12 +346,6 @@ curl -I https://us-east-1.linodeobjects.com/your-bucket
 # Look for x-rgw-bytes-used and x-rgw-objects-count headers
 ```
 
-**Authentication Issues:**
-```bash
-# Test credentials
-aws s3 ls --endpoint-url=https://us-east-1.linodeobjects.com
-```
-
 **Connection Issues:**
 ```bash
 # Test exporter health
@@ -409,15 +397,15 @@ For large buckets (like Loki storage), the HEAD method provides:
 
 The HEAD method uses Ceph RGW's built-in bucket usage tracking via `x-rgw-bytes-used` and `x-rgw-objects-count` headers.
 
-## 🚨 Troubleshooting Production Issues
+## Troubleshooting
 
-### HEAD Method Failures
+### HEAD Method Issues
 
 If you see errors like `HEAD method failed` in your logs:
 
 ```bash
 # Check if your Ceph RGW supports HEAD method
-curl -I -H "Authorization: AWS your-key:signature" \
+curl -I -H "Authorization: LINODE your-key:signature" \
   https://us-east-1.linodeobjects.com/your-bucket-name
 
 # Look for x-rgw-* headers in the response
@@ -429,25 +417,13 @@ x-rgw-bytes-used: 1234567890
 x-rgw-objects-count: 12345
 ```
 
-### Production Safety Alerts
+### Log Messages
 
 Monitor these log messages:
 
-- ✅ `Using HEAD method for bucket usage` - Normal operation
-- ⚠️ `HEAD method failed and prod-safe-mode enabled` - HEAD failed, no fallback (SAFE)
-- 🚨 `HEAD method failed, falling back to ListObjects` - DANGEROUS for large buckets!
-
-### Emergency Response
-
-If your exporter is causing OBJ incidents:
-
-```bash
-# Immediately enable production safe mode
-kubectl patch deployment s3-exporter -p '{"spec":{"template":{"spec":{"containers":[{"name":"s3-exporter","args":["--s3.endpoint-url=https://us-east-1.linodeobjects.com","--s3.force-path-style=true","--s3.prod-safe-mode=true"]}]}}}}'
-
-# Or restart with safe flags
-./s3_exporter --s3.prod-safe-mode=true --s3.use-head-method=true
-```
+- ✅ `HEAD method successful` - Normal operation using efficient HEAD method
+- ⚠️ `HEAD method failed or returned no data` - Falling back to ListObjects
+- ℹ️ `Using ListObjects for detailed metrics` - Normal fallback behavior
 
 ## Linode Object Storage Regions
 
@@ -471,7 +447,7 @@ For production Loki buckets, the HEAD method provides:
 - **🚀 Speed**: Single request vs potentially thousands of ListObjects calls
 - **💾 Efficiency**: No bandwidth wasted listing object details  
 - **📈 Scalability**: Performance doesn't degrade with object count
-- **🛡️ Safety**: Cannot cause storage backend performance issues or OBJ incidents
+- **⚡ Performance**: Consistent response times regardless of bucket size
 
 The HEAD method uses Ceph RGW's built-in bucket usage tracking via `x-rgw-bytes-used` and `x-rgw-objects-count` headers.
 
@@ -488,4 +464,4 @@ Contributions welcome! This project follows standard Go project practices:
 
 ## Original Project
 
-This is a fork of [ribbybibby/s3_exporter](https://github.com/ribbybibby/s3_exporter) enhanced for Linode Object Storage and Ceph RGW optimization with critical production safety improvements.
+This is a fork of [ribbybibby/s3_exporter](https://github.com/ribbybibby/s3_exporter) enhanced for Linode Object Storage and Ceph RGW HEAD method optimization.
