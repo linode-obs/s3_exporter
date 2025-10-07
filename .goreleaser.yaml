@@ -1,4 +1,4 @@
-version: 1
+version: 2
 
 project_name: s3_exporter
 
@@ -21,14 +21,13 @@ builds:
     binary: s3_exporter
     main: ./s3_exporter.go
     ldflags:
-      - -s -w -X main.version={{.Version}} -X main.commit={{.Commit}} -X main.date={{.Date}}
+      - -s -w
 
 archives:
   - id: s3_exporter
-    format: tar.gz
-    format_overrides:
-      - goos: windows
-        format: zip
+    files:
+      - README.md
+      - LICENSE
     name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
 
 nfpms:
@@ -59,12 +58,14 @@ dockers:
       - "--label=org.opencontainers.image.title={{.ProjectName}}"
       - "--label=org.opencontainers.image.revision={{.FullCommit}}"
       - "--label=org.opencontainers.image.version={{.Version}}"
+      - "--label=org.opencontainers.image.source=https://github.com/linode-obs/s3_exporter"
+      - "--label=org.opencontainers.image.description=Prometheus exporter for S3 bucket metrics with HEAD method support"
 
 checksum:
   name_template: 'checksums.txt'
 
 snapshot:
-  name_template: "{{ incpatch .Version }}-next"
+  version_template: "{{ incpatch .Version }}-next"
 
 changelog:
   sort: asc

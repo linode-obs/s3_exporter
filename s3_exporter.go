@@ -75,10 +75,10 @@ var (
 )
 
 type Exporter struct {
-	svc         s3iface.S3API
-	bucket      string
-	prefix      string
-	delimiter   string
+	svc           s3iface.S3API
+	bucket        string
+	prefix        string
+	delimiter     string
 	useHeadMethod bool
 	prodSafeMode  bool
 }
@@ -113,9 +113,9 @@ func getBucketUsageHEAD(svc s3iface.S3API, bucket string) (float64, float64, err
 	headers := req.HTTPResponse.Header
 	bytesStr := headers.Get("x-rgw-bytes-used")
 	objsStr := headers.Get("x-rgw-objects-count")
-	
+
 	log.Debugf("Received Ceph headers: x-rgw-bytes-used=%q, x-rgw-objects-count=%q", bytesStr, objsStr)
-	
+
 	// Parse bytes used
 	var bytesUsed float64 = 0
 	if bytesStr != "" {
@@ -125,8 +125,8 @@ func getBucketUsageHEAD(svc s3iface.S3API, bucket string) (float64, float64, err
 			log.Warnf("Failed to parse x-rgw-bytes-used header %q: %v", bytesStr, err)
 		}
 	}
-	
-	// Parse object count  
+
+	// Parse object count
 	var objCount float64 = 0
 	if objsStr != "" {
 		if parsed, err := strconv.ParseFloat(strings.TrimSpace(objsStr), 64); err == nil {
@@ -140,7 +140,7 @@ func getBucketUsageHEAD(svc s3iface.S3API, bucket string) (float64, float64, err
 	if bytesUsed > 0 || objCount > 0 {
 		return bytesUsed, objCount, nil
 	}
-	
+
 	return 0, 0, nil
 }
 
@@ -167,7 +167,7 @@ func (e *Exporter) Collect(ch chan<- prometheus.Metric) {
 			return
 		}
 		log.Warnf("HEAD method failed or returned no data: %v", err)
-		
+
 		// If prod-safe-mode is enabled and HEAD fails, refuse to do dangerous ListObjects
 		if e.prodSafeMode {
 			log.Errorf("HEAD method failed and prod-safe-mode enabled - refusing ListObjects to prevent incidents")
@@ -207,16 +207,16 @@ func (e *Exporter) collectWithListObjects(ch chan<- prometheus.Metric) {
 			)
 			return
 		}
-		
+
 		commonPrefixes = commonPrefixes + len(resp.CommonPrefixes)
-		
+
 		for _, item := range resp.Contents {
 			// Production safety: check object limit
 			if objectsProcessed >= int64(maxObjectsLimit) {
 				log.Warnf("Reached production safety limit of %d objects, stopping enumeration", maxObjectsLimit)
 				break
 			}
-			
+
 			numberOfObjects++
 			objectsProcessed++
 			totalSize = totalSize + *item.Size
@@ -228,19 +228,19 @@ func (e *Exporter) collectWithListObjects(ch chan<- prometheus.Metric) {
 				biggestObjectSize = *item.Size
 			}
 		}
-		
+
 		// Production safety: break if we hit the limit
 		if objectsProcessed >= int64(maxObjectsLimit) {
 			log.Warnf("Hit production safety limit, processed %d objects", objectsProcessed)
 			break
 		}
-		
+
 		if resp.NextContinuationToken == nil {
 			break
 		}
 		query.ContinuationToken = resp.NextContinuationToken
 	}
-	
+
 	listDuration := time.Now().Sub(startList).Seconds()
 
 	ch <- prometheus.MustNewConstMetric(
@@ -335,16 +335,16 @@ func init() {
 
 func main() {
 	var (
-		listenAddress   = kingpin.Flag("web.listen-address", "Address to listen on for web interface and telemetry.").Default(":9340").String()
-		metricsPath     = kingpin.Flag("web.metrics-path", "Path under which to expose metrics").Default("/metrics").String()
-		probePath       = kingpin.Flag("web.probe-path", "Path under which to expose the probe endpoint").Default("/probe").String()
-		discoveryPath   = kingpin.Flag("web.discovery-path", "Path under which to expose service discovery").Default("/discovery").String()
-		endpointURL     = kingpin.Flag("s3.endpoint-url", "Custom endpoint URL").String()
-		disableSSL      = kingpin.Flag("s3.disable-ssl", "Custom disable SSL").Bool()
-		forcePathStyle  = kingpin.Flag("s3.force-path-style", "Custom force path style").Bool()
-		useHeadFlag     = kingpin.Flag("s3.use-head-method", "Use HEAD method to get bucket usage from Ceph RGW").Bool()
-		prodSafeFlag    = kingpin.Flag("s3.prod-safe-mode", "Production safe mode - never fall back to ListObjects (prevents OBJ incidents)").Bool()
-		maxObjectsFlag  = kingpin.Flag("s3.max-objects", "Maximum number of objects to process (production safety limit)").Default("10000").Int()
+		listenAddress  = kingpin.Flag("web.listen-address", "Address to listen on for web interface and telemetry.").Default(":9340").String()
+		metricsPath    = kingpin.Flag("web.metrics-path", "Path under which to expose metrics").Default("/metrics").String()
+		probePath      = kingpin.Flag("web.probe-path", "Path under which to expose the probe endpoint").Default("/probe").String()
+		discoveryPath  = kingpin.Flag("web.discovery-path", "Path under which to expose service discovery").Default("/discovery").String()
+		endpointURL    = kingpin.Flag("s3.endpoint-url", "Custom endpoint URL").String()
+		disableSSL     = kingpin.Flag("s3.disable-ssl", "Custom disable SSL").Bool()
+		forcePathStyle = kingpin.Flag("s3.force-path-style", "Custom force path style").Bool()
+		useHeadFlag    = kingpin.Flag("s3.use-head-method", "Use HEAD method to get bucket usage from Ceph RGW").Bool()
+		prodSafeFlag   = kingpin.Flag("s3.prod-safe-mode", "Production safe mode - never fall back to ListObjects (prevents OBJ incidents)").Bool()
+		maxObjectsFlag = kingpin.Flag("s3.max-objects", "Maximum number of objects to process (production safety limit)").Default("10000").Int()
 	)
 
 	log.AddFlags(kingpin.CommandLine)
