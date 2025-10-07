@@ -1,3 +1,34 @@
+# Binaries
 s3_exporter
-bin/**
+s3_exporter.exe
+s3_exporter_*
+bin/
+dist/
+
+# Build artifacts
 *.tar.gz
+*.zip
+
+# Docker
+.dockerignore
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Temporary files
+*.tmp
+*.log
+
+# Development artifacts
+*-monitoring.yaml
+*-alerts.yaml
+*-dashboard.yaml
+test-*.yaml
+deploy.sh
